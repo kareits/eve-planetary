@@ -197,7 +197,7 @@ tr:hover td{background:#122331}
 <details class="filters panel" id="filterBox" open>
   <summary>Фильтры <span class="chev" id="filterHint">свернуть</span></summary>
   <div class="filterbody">
-    <div class="notice">Расстояния считаются локально по графу врат. Интернет не нужен.</div>
+    <div class="notice">Расстояния считаются локально по графу врат. Интернет не нужен. Текущие фильтры запоминаются автоматически; «Сбросить» возвращает U-HYZN и 6 прыжков.</div>
 
     <div class="presets">
       <span class="fl">Сохранённые наборы фильтров</span>
@@ -214,7 +214,7 @@ tr:hover td{background:#122331}
     <div class="field autocomplete">
       <label for="home">Домашняя система</label>
       <input id="home" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
-             placeholder="Начните вводить, например Jit…"
+             placeholder="Начните вводить, например U-HY…"
              role="combobox" aria-autocomplete="list" aria-controls="homeSuggestions" aria-expanded="false">
       <div id="homeSuggestions" class="suggestions" role="listbox" hidden></div>
     </div>
@@ -550,9 +550,18 @@ function collectFilters(){
   };
 }
 
-function applyPreset(p){
-  if(!p || !p.f) return;
-  var f = p.f, missing = [];
+/* ============ значения по умолчанию и запоминание фильтров ============ */
+var stateKey = 'ee-prf-state-v1';
+var SORT_KEYS = ['fav','jumps','region','system','security','planet','type','resource','richness','output'];
+var DEFAULTS = {
+  home:'U-HYZN', jmin:'', jmax:'6', region:'', con:'', q:'', res:'',
+  rich:'0', minOut:'', sec:'', ptype:'', limit:'100',
+  favOnly:false, sortKey:'output', sortDir:-1
+};
+
+/* раскладываем набор по полям формы; возвращаем то, чего нет в текущей базе */
+function setFilters(f){
+  var missing = [];
   $('home').value = f.home || '';
   $('jmin').value = f.jmin || '';
   $('jmax').value = f.jmax || '';
@@ -571,15 +580,66 @@ function applyPreset(p){
   $('favorites').textContent = favoritesOnly ? 'Показать все' : 'Только избранное';
   $('favorites').classList.toggle('on', favoritesOnly);
 
-  sortKey = f.sortKey || 'output';
+  sortKey = SORT_KEYS.indexOf(f.sortKey) >= 0 ? f.sortKey : 'output';
   sortDir = f.sortDir === 1 ? 1 : -1;
   $('sortSelect').value = sortKey;
   $('sortDirBtn').textContent = sortDir > 0 ? 'По возрастанию' : 'По убыванию';
+  return missing;
+}
 
+function fillDefaults(o){
+  var f = {};
+  for(var k in DEFAULTS) f[k] = (o && (k in o)) ? o[k] : DEFAULTS[k];
+  return f;
+}
+
+/* состояние живёт в двух местах: localStorage и адрес страницы.
+   Safari может очистить хранилище, но ссылка/закладка переживёт это. */
+function encodeState(f){
+  var out = {};
+  for(var k in DEFAULTS){ if(f[k] !== DEFAULTS[k]) out[k] = f[k]; }
+  for(var _ in out) return 'f=' + encodeURIComponent(JSON.stringify(out));
+  return '';
+}
+function decodeState(){
+  var h = String(location.hash || '').replace(/^#/, '');
+  if(h.slice(0,2) !== 'f=') return null;
+  try{ return fillDefaults(JSON.parse(decodeURIComponent(h.slice(2)))); }
+  catch(e){ return null; }
+}
+
+var stateTimer = null;
+function saveState(){
+  clearTimeout(stateTimer);
+  stateTimer = setTimeout(function(){
+    var f = collectFilters();
+    try{ window.localStorage.setItem(stateKey, JSON.stringify(f)); } catch(e){}
+    try{
+      var h = encodeState(f);
+      history.replaceState(null, '', h ? ('#' + h) : (location.pathname + location.search));
+    } catch(e){}
+  }, 400);
+}
+function restoreState(){
+  var f = decodeState();
+  if(!f){
+    try{
+      var raw = window.localStorage.getItem(stateKey);
+      if(raw) f = fillDefaults(JSON.parse(raw));
+    } catch(e){}
+  }
+  setFilters(f || DEFAULTS);
+}
+
+function applyPreset(p){
+  if(!p || !p.f) return;
+  var missing = setFilters(fillDefaults(p.f));
   activePreset = p.name;
   renderPresets();
   closeSuggestions();
-  note(missing.length ? ('В текущей базе не найдено: ' + missing.join(', ') + ' — эти поля сброшены.') : ('Применён набор «' + p.name + '»'), false, missing.length > 0);
+  note(missing.length
+    ? ('В текущей базе не найдено: ' + missing.join(', ') + ' — эти поля сброшены.')
+    : ('Применён набор «' + p.name + '»'), false, missing.length > 0);
   applyFilters();
 }
 
@@ -879,6 +939,8 @@ function render(){
     var base = ths[t].textContent.replace(/\s*[▲▼]$/,'');
     ths[t].textContent = base + (ths[t].dataset.sort === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : '');
   }
+
+  saveState();
 }
 
 function toggleFav(key){
@@ -889,16 +951,11 @@ function toggleFav(key){
 
 /* ============ прочие действия ============ */
 function reset(){
-  ['home','jmin','jmax','systemSearch','minOutput'].forEach(function(id){ $(id).value = ''; });
-  ['region','constellation','richness','security','ptype','resources','limit'].forEach(function(id){ $(id).selectedIndex = 0; });
-  favoritesOnly = false;
-  $('favorites').textContent = 'Только избранное';
-  $('favorites').classList.remove('on');
+  setFilters(DEFAULTS);
   $('presetName').value = '';
   activePreset = null;
   renderPresets();
   note('');
-  fillConstellations();
   closeSuggestions();
   applyFilters();
 }
@@ -1062,9 +1119,10 @@ function boot(){
     fillRegions(); fillConstellations(); fillResources(); fillTypes();
     presets = loadPresets();
     renderPresets();
+    restoreState();
     wire();
     setStatus();
-    if(!storageOk) note('Браузер не разрешает сохранение: наборы и избранное будут действовать только до перезагрузки.', true, true);
+    if(!storageOk) note('Браузер не разрешает сохранение. Фильтры всё равно записываются в адрес страницы — добавьте её в закладки, чтобы не терять настройки.', true, true);
     applyFilters();
   } catch(err){
     fatal(err && err.message ? err.message : String(err));
