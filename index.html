@@ -1669,11 +1669,17 @@ var yMats = null;      /* [{ru,en,out,eff,req:[[name,qty],...]}] */
 var yQty = null;       /* количества к производству */
 var yEditing = -1;     /* индекс материала с открытым редактором */
 
+function yCopy(p){
+  return { ru:p.ru, en:p.en, out:p.out, eff:p.eff, price:p.price || 0, cost:p.cost || 0,
+           req:p.req.map(function(r){ return [r[0], r[1]]; }) };
+}
+function yBuiltin(en){
+  for(var i=0;i<POLY_DEF.length;i++) if(POLY_DEF[i].en === en) return POLY_DEF[i];
+  return null;
+}
+
 function yDefaults(){
-  return POLY_DEF.map(function(p){
-    return { ru:p.ru, en:p.en, out:p.out, eff:p.eff, price:p.price || 0, cost:p.cost || 0,
-             req:p.req.map(function(r){ return [r[0], r[1]]; }) };
-  });
+  return POLY_DEF.map(yCopy);
 }
 
 /* Встроенные рецепты — основа; сохранённые в браузере перекрывают их по
@@ -1697,9 +1703,15 @@ function yLoad(){
     var rec = { ru:m.ru || m.en, en:m.en, out:m.out || 1, eff:m.eff || 96,
                 price:m.price || 0, cost:m.cost || 0, req:m.req || [] };
     if(m.en in byEn){
-      /* цену из встроенных данных сохраняем, если в файле её нет */
-      if(!rec.price) rec.price = base[byEn[m.en]].price || 0;
-      if(!rec.cost) rec.cost = base[byEn[m.en]].cost || 0;
+      var b = base[byEn[m.en]];
+      /* цены и состав берём из встроенных данных, если в сохранённых их нет —
+         иначе пустая запись навсегда перекрыла бы готовый рецепт */
+      if(!rec.price) rec.price = b.price || 0;
+      if(!rec.cost) rec.cost = b.cost || 0;
+      if(!rec.req.length && b.req.length){
+        rec.req = b.req.map(function(r){ return [r[0], r[1]]; });
+        rec.out = b.out; rec.eff = b.eff;
+      }
       base[byEn[m.en]] = rec;
     }
     else base.push(rec);
@@ -1868,7 +1880,7 @@ function yEditorHtml(i){
   html += '</div>'
     + '<div class="buttonrow" style="margin-top:10px">'
     + '<button type="button" class="secondary yed-add">Ещё строка</button>'
-    + '<button type="button" class="secondary yed-del">Удалить рецепт</button>'
+    + '<button type="button" class="secondary yed-restore">Вернуть встроенный</button>'
     + '</div>'
     + '<div class="buttonrow">'
     + '<button type="button" class="yed-save">Сохранить рецепт</button>'
@@ -1913,14 +1925,25 @@ function ySaveEditor(box, i){
     seen[n.toLowerCase()] = req.length;
     req.push([n, q]);
   }
-  m.req = req;
+  var restored = false;
+  if(!req.length){
+    var b = yBuiltin(m.en);
+    if(b && b.req.length){
+      m.req = b.req.map(function(r){ return [r[0], r[1]]; });
+      m.out = b.out; m.eff = b.eff;
+      restored = true;
+    } else m.req = req;
+  } else m.req = req;
+
   ySave();
   yEditing = -1;
   yRenderList();
   yCompute();
-  yNote(req.length
-    ? ('Рецепт «' + m.ru + '» сохранён: ' + req.length + ' поз.' + (bad ? ' Пропущено незаполненных строк: ' + bad : ''))
-    : ('Рецепт «' + m.ru + '» очищен'), bad > 0);
+  if(restored) yNote('Все строки были пустыми — вернул встроенный рецепт «' + m.ru + '».', true);
+  else yNote(req.length
+    ? ('Рецепт «' + m.ru + '» сохранён: ' + req.length + ' поз.'
+       + (bad ? ' Пропущено незаполненных строк: ' + bad : ''))
+    : ('Рецепт «' + m.ru + '» пуст.'), bad > 0);
 }
 
 function yCompute(){
@@ -2179,9 +2202,12 @@ function yWire(){
     }
     if(el.closest('.yed-save')){ ySaveEditor(box, yEditing); return; }
     if(el.closest('.yed-cancel')){ yEditing = -1; yRenderList(); return; }
-    if(el.closest('.yed-del')){
-      yMats[yEditing].req = [];
+    if(el.closest('.yed-restore')){
+      var b = yBuiltin(yMats[yEditing].en);
+      if(!b || !b.req.length){ yNote('Для этого материала нет встроенного рецепта.', true); return; }
+      yMats[yEditing] = yCopy(b);
       ySave(); yEditing = -1; yRenderList(); yCompute();
+      yNote('Восстановлен встроенный рецепт «' + b.ru + '».');
       return;
     }
   });
